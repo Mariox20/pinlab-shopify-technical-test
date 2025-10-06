@@ -1,0 +1,3 @@
+sku,location_name,result,message
+TSHIRT001,Main Warehouse,error,Location not found
+TSHIRT002,Branch Santiago,error,Location not found

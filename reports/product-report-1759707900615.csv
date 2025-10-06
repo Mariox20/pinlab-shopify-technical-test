@@ -1,0 +1,5 @@
+handle,sku,result,message
+test-shirt,TSHIRT001,error,"{""errors"":{""image"":[""Could not download image: [\""/url is not a valid image file type.\""]""]}}"
+test-shirt,TSHIRT002,updated_variant,variant 45932126011567 updated
+test-shirt,TSHIRT002,updated_variant,variant 45932126011567 updated
+test-shirt,TSHIRT002,updated_variant,variant 45932126011567 updated

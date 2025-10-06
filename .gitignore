@@ -1,0 +1,61 @@
+# Dependencies
+node_modules/
+
+# Environment variables
+.env
+.env.local
+.env.production
+.env.*.local
+
+# Reports generados (mantener solo ejemplos)
+reports/*.json
+!reports/.gitkeep
+!reports/example-*.json
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# IDE - Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-workspace
+*.sublime-project
+
+# Test coverage
+coverage/
+.nyc_output/
+*.lcov
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Build files (si usas TypeScript o bundlers)
+dist/
+build/
+out/
+
+# Package manager lock files (opcional, depende de tu preferencia)
+# package-lock.json
+# yarn.lock
