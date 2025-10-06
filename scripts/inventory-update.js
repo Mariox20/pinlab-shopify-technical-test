@@ -170,6 +170,34 @@ const writeReport = async (rows, outPath) => {
   await csvWriter.writeRecords(rows);
 };
 
+// Función para generar timestamp en horario de Chile
+function getChileTimestamp() {
+  const now = new Date();
+  const options = {
+    timeZone: 'America/Santiago',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  };
+  
+  const formatter = new Intl.DateTimeFormat('es-CL', options);
+  const parts = formatter.formatToParts(now);
+  
+  const year = parts.find(p => p.type === 'year').value;
+  const month = parts.find(p => p.type === 'month').value;
+  const day = parts.find(p => p.type === 'day').value;
+  const hour = parts.find(p => p.type === 'hour').value;
+  const minute = parts.find(p => p.type === 'minute').value;
+  const second = parts.find(p => p.type === 'second').value;
+  
+  // Formato: YYYY-MM-DD-HHMMSS
+  return `${year}-${month}-${day}-${hour}${minute}${second}`;
+}
+
 const main = async () => {
   try {
     const csvPath = path.resolve(process.cwd(), "examples", "inventory.csv");
@@ -182,33 +210,43 @@ const main = async () => {
     const report = [];
 
     for (const row of rows) {
-    try {
+      try {
         const res = await processRow(row);
         if (res.message && res.message.toLowerCase().includes("location not found")) {
-        res.message = `Location "${row.location_name}" not found or inactive`;
+          res.message = `Location "${row.location_name}" not found or inactive`;
         }
 
         console.log(res);
         report.push(res);
 
-    } catch (error) {
+      } catch (error) {
         console.error("Error processing row:", row, error);
 
         report.push({
-        sku: row.sku || "unknown",
-        locationName: row.location_name || "unknown",
-        result: "error",
-        message: `Unexpected error: ${error.message}`
+          sku: row.sku || "unknown",
+          locationName: row.location_name || "unknown",
+          result: "error",
+          message: `Unexpected error: ${error.message}`
         });
-    }
+      }
     }
 
-    const outPath = path.resolve(process.cwd(), "reports", `inventory-report-${Date.now()}.csv`);
+    // Generar timestamp en horario de Chile
+    const timestamp = getChileTimestamp();
+
+    // Crear ruta del reporte
+    const outPath = path.resolve(process.cwd(), "reports", `inventory-report-${timestamp}.csv`);
+    
+    // Crear carpeta reports si no existe
     fs.mkdirSync(path.dirname(outPath), { recursive: true });
+    
+    // Escribir reporte
     await writeReport(report, outPath);
+    
     console.log("Report generated:", outPath);
   } catch (err) {
     console.error("Fatal error:", err);
+    process.exit(1);
   }
 };
 
