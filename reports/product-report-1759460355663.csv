@@ -1,3 +1,0 @@
-handle,sku,result,message
-test-shirt,TSHIRT001,error,"""getaddrinfo ENOTFOUND https"""
-test-shirt,TSHIRT002,error,"""getaddrinfo ENOTFOUND https"""

@@ -1,4 +1,0 @@
-sku,location_name,result,message
-TSHIRT001,Shop location,success,Stock set to 20
-TSHIRT001,Shop Location 2,error,Location not found
-TSHIRT002,Shop Location 3,error,Location not found

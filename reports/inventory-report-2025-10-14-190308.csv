@@ -1,0 +1,7 @@
+sku,location_name,result,message
+TSHIRT001,Shop location,success,Stock updated to 3
+TSHIRT001,Shop Location 2,success,Stock updated to 5
+TSHIRT003,Shop Location,success,Stock updated to 4
+TSHIRT003,Shop location 2,success,Stock updated to 10
+TSHIRT004,Shop Location,success,Stock updated to 5
+TSHIRT004,Shop Location 2,success,Stock updated to 15

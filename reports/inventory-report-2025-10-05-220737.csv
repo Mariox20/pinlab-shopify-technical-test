@@ -1,4 +1,0 @@
-sku,location_name,result,message
-TSHIRT001,Shop location,success,Stock set to 20
-TSHIRT001,Shop Location 2,error,"Location ""Shop Location 2"" not found or inactive"
-TSHIRT002,Shop Location 3,error,"Location ""Shop Location 3"" not found or inactive"

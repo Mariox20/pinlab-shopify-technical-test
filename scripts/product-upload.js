@@ -29,6 +29,36 @@ const axiosInstance = axios.create({
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Obtener todas las ubicaciones activas
+const getLocations = async () => {
+  try {
+    const res = await axiosInstance.get("/locations.json");
+    return res.data.locations.filter(loc => loc.active);
+  } catch (err) {
+    console.error("Error getting locations:", err.message);
+    return [];
+  }
+};
+
+// Configurar niveles de inventario para una variante en todas las ubicaciones
+const setInventoryLevels = async (inventoryItemId, locations) => {
+  try {
+    for (const location of locations) {
+      // Conectar el inventory item a la ubicación si no está conectado
+      await axiosInstance.post("/inventory_levels/connect.json", {
+        location_id: location.id,
+        inventory_item_id: inventoryItemId
+      });
+      await sleep(300);
+    }
+  } catch (err) {
+    // Si ya está conectado, ignorar el error
+    if (!err?.response?.data?.errors?.base?.includes("already exists")) {
+      console.error("Error setting inventory levels:", err?.response?.data || err.message);
+    }
+  }
+};
+
 const readCsv = (filePath) =>
   new Promise((resolve, reject) => {
     const rows = [];
@@ -82,7 +112,7 @@ const ensureImages = async (product, imageUrls) => {
 
 const normalize = (str) => (str ? String(str).trim() : "");
 
-const processRow = async (row) => {
+const processRow = async (row, locations) => {
   const handle = normalize(row.handle).toLowerCase();
   const title = normalize(row.title) || handle;
   const body_html = normalize(row.body_html) || "";
@@ -101,25 +131,59 @@ const processRow = async (row) => {
       const matchedVariant = variants.find((v) => v.sku && v.sku === sku);
       if (matchedVariant) {
         const variantPayload = { id: matchedVariant.id, price, sku, barcode };
-        await updateVariant(matchedVariant.id, variantPayload);
+        const updatedVariant = await updateVariant(matchedVariant.id, variantPayload);
+        
+        // Asociar a todas las ubicaciones
+        if (updatedVariant.inventory_item_id) {
+          await setInventoryLevels(updatedVariant.inventory_item_id, locations);
+        }
+        
         if (imageUrls.length) await ensureImages(existingProduct, imageUrls);
-        return { handle, sku, result: "updated_variant", message: `variant ${matchedVariant.id} updated` };
+        return { handle, sku, result: "updated_variant", message: `variant ${matchedVariant.id} updated & associated to locations` };
       } else {
-        const newVariantPayload = { option1: option1_value, price, sku, barcode };
+        const newVariantPayload = { 
+          option1: option1_value, 
+          price, 
+          sku, 
+          barcode, 
+          inventory_management: "shopify" 
+        };
         const newVariant = await createVariant(existingProduct.id, newVariantPayload);
+        
+        // Asociar a todas las ubicaciones
+        if (newVariant.inventory_item_id) {
+          await setInventoryLevels(newVariant.inventory_item_id, locations);
+        }
+        
         if (imageUrls.length) await ensureImages(existingProduct, imageUrls);
-        return { handle, sku, result: "created_variant", message: `variant ${newVariant.id} created` };
+        return { handle, sku, result: "created_variant", message: `variant ${newVariant.id} created & associated to locations` };
       }
     } else {
       const productPayload = {
         title,
         body_html,
         handle,
-        variants: [{ option1: option1_value, price, sku, barcode }],
+        variants: [{ 
+          option1: option1_value, 
+          price, 
+          sku, 
+          barcode, 
+          inventory_management: "shopify" 
+        }],
         images: imageUrls.map((src) => ({ src })),
       };
       const newProduct = await createProduct(productPayload);
-      return { handle, sku, result: "created_product", message: `product ${newProduct.id} created` };
+      
+      // Asociar variantes a todas las ubicaciones
+      if (newProduct.variants && newProduct.variants.length > 0) {
+        for (const variant of newProduct.variants) {
+          if (variant.inventory_item_id) {
+            await setInventoryLevels(variant.inventory_item_id, locations);
+          }
+        }
+      }
+      
+      return { handle, sku, result: "created_product", message: `product ${newProduct.id} created & associated to locations` };
     }
   } catch (err) {
     const errMsg = err?.response?.data || err.message || String(err);
@@ -172,6 +236,19 @@ function getChileTimestamp() {
 
 const main = async () => {
   try {
+    // Obtener ubicaciones activas
+    console.log("Fetching active locations...");
+    const locations = await getLocations();
+    
+    if (locations.length === 0) {
+      console.error("No active locations found in your Shopify store!");
+      process.exit(1);
+    }
+    
+    console.log(`Found ${locations.length} active location(s):`);
+    locations.forEach(loc => console.log(`  - ${loc.name} (ID: ${loc.id})`));
+    console.log("");
+    
     const csvPath = path.resolve(process.cwd(), "examples", "products.csv");
     if (!fs.existsSync(csvPath)) {
       console.error("CSV file not found:", csvPath);
@@ -181,8 +258,10 @@ const main = async () => {
     const rows = await readCsv(csvPath);
     const report = [];
     
+    console.log(`Processing ${rows.length} products...\n`);
+    
     for (const r of rows) {
-      const res = await processRow(r);
+      const res = await processRow(r, locations);
       console.log(res);
       report.push(res);
     }
@@ -199,7 +278,7 @@ const main = async () => {
     // Escribir reporte
     await writeReport(report, outPath);
     
-    console.log("Report generated:", outPath);
+    console.log("\n✓ Report generated:", outPath);
   } catch (err) {
     console.error("Fatal error", err);
     process.exit(1);

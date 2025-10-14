@@ -1,4 +1,7 @@
 sku,location_name,available
-TSHIRT001,Shop location,20
-TSHIRT001,Shop Location 2,10
-TSHIRT002,Shop Location 3,15
+TSHIRT001,Shop location,3
+TSHIRT001,Shop Location 2,5
+TSHIRT003,Shop Location,4
+TSHIRT003,Shop location 2,10
+TSHIRT004,Shop Location,5
+TSHIRT004,Shop Location 2,15

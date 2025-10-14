@@ -1,0 +1,7 @@
+sku,location_name,result,message
+TSHIRT001,Shop location,success,Stock updated from 0 to 3 (GraphQL inventorySetQuantities)
+TSHIRT001,Shop Location 2,success,Stock updated from 0 to 5 (GraphQL inventorySetQuantities)
+TSHIRT003,Shop Location,success,Stock updated from 0 to 4 (GraphQL inventorySetQuantities)
+TSHIRT003,Shop location 2,success,Stock updated from 0 to 10 (GraphQL inventorySetQuantities)
+TSHIRT004,Shop Location,success,Stock updated from 0 to 5 (GraphQL inventorySetQuantities)
+TSHIRT004,Shop Location 2,success,Stock updated from 0 to 15 (GraphQL inventorySetQuantities)

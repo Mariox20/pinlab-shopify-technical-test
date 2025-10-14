@@ -17,6 +17,7 @@ if (!STORE || !TOKEN) {
 }
 
 const GRAPHQL_URL = `https://${STORE}/admin/api/${API_VERSION}/graphql.json`;
+const REST_BASE_URL = `https://${STORE}/admin/api/${API_VERSION}`;
 
 const axiosInstance = axios.create({
   baseURL: GRAPHQL_URL,
@@ -26,6 +27,8 @@ const axiosInstance = axios.create({
   },
   timeout: 20000,
 });
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const readCsv = (filePath) =>
   new Promise((resolve, reject) => {
@@ -37,51 +40,126 @@ const readCsv = (filePath) =>
       .on("error", (err) => reject(err));
   });
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-// --- Helper functions ---
-
+// Buscar producto por SKU usando REST API
 const findProductBySKU = async (sku) => {
-  const url = `https://${STORE}/admin/api/${API_VERSION}/products.json?fields=id,variants&variant_sku=${encodeURIComponent(
-    sku
-  )}`;
-  const res = await axios.get(url, {
-    headers: { "X-Shopify-Access-Token": TOKEN },
-  });
-  if (res.data.products && res.data.products.length) {
-    const product = res.data.products[0];
-    const variant = product.variants.find((v) => v.sku === sku);
-    return { product, variant };
+  try {
+    const url = `${REST_BASE_URL}/products.json?fields=id,variants&limit=250`;
+    const res = await axios.get(url, {
+      headers: { "X-Shopify-Access-Token": TOKEN },
+    });
+    
+    for (const product of res.data.products || []) {
+      const variant = product.variants.find((v) => v.sku === sku);
+      if (variant) {
+        return { product, variant };
+      }
+    }
+    return null;
+  } catch (err) {
+    console.error(`Error searching product by SKU ${sku}:`, err.message);
+    return null;
   }
-  return null;
 };
 
-const getLocationIdByName = async (locationName) => {
+// Obtener ubicaciones mediante GraphQL (incluye activas e inactivas)
+const getLocationByName = async (locationName) => {
   const query = `
     query {
-      locations(first: 50) {
+      locations(first: 50, includeLegacy: true, includeInactive: true) {
         edges {
           node {
             id
             name
+            isActive
           }
         }
       }
     }
   `;
-  const res = await axiosInstance.post("", { query });
-  const locations = res.data.data.locations.edges.map((e) => e.node);
-  const location = locations.find((loc) => loc.name === locationName);
-  return location ? location.id : null;
+  
+  try {
+    const res = await axiosInstance.post("", { query });
+    const locations = res.data.data.locations.edges.map((e) => e.node);
+    const location = locations.find((loc) => 
+      loc.name.toLowerCase().trim() === locationName.toLowerCase().trim()
+    );
+    return location || null;
+  } catch (err) {
+    console.error("Error fetching locations:", err.message);
+    return null;
+  }
 };
 
-const setInventory = async (inventoryItemId, locationId, available) => {
+// Activar nivel de inventario usando REST API (necesario antes de usar GraphQL)
+const connectInventoryToLocation = async (inventoryItemId, locationId) => {
+  try {
+    const numericInventoryItemId = inventoryItemId.split('/').pop();
+    const numericLocationId = locationId.split('/').pop();
+    
+    const url = `${REST_BASE_URL}/inventory_levels/connect.json`;
+    const res = await axios.post(
+      url,
+      {
+        inventory_item_id: parseInt(numericInventoryItemId, 10),
+        location_id: parseInt(numericLocationId, 10),
+      },
+      {
+        headers: { 
+          "X-Shopify-Access-Token": TOKEN,
+          "Content-Type": "application/json"
+        },
+      }
+    );
+    return { success: true, data: res.data };
+  } catch (err) {
+    // Si ya está conectado, no es un error
+    if (err?.response?.data?.errors?.base?.includes("already exists")) {
+      return { success: true, alreadyExists: true };
+    }
+    console.error("Error connecting inventory:", err?.response?.data || err.message);
+    return { success: false, error: err?.response?.data || err.message };
+  }
+};
+
+// Obtener el nivel de inventario actual usando GraphQL
+const getInventoryLevel = async (inventoryItemId, locationId) => {
+  const query = `
+    query getInventoryLevel($inventoryItemId: ID!, $locationId: ID!) {
+      inventoryLevel(inventoryItemId: $inventoryItemId, locationId: $locationId) {
+        id
+        available
+        quantities(names: ["available"]) {
+          name
+          quantity
+        }
+      }
+    }
+  `;
+
+  const variables = { inventoryItemId, locationId };
+  
+  try {
+    const res = await axiosInstance.post("", { query, variables });
+    return res.data.data.inventoryLevel;
+  } catch (err) {
+    return null;
+  }
+};
+
+// Actualizar inventario usando inventorySetQuantities (GraphQL)
+const setInventoryGraphQL = async (inventoryItemId, locationId, available) => {
   const mutation = `
     mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) {
       inventorySetQuantities(input: $input) {
         inventoryAdjustmentGroup {
+          id
           createdAt
           reason
+          changes {
+            name
+            delta
+            quantityAfterChange
+          }
         }
         userErrors {
           field
@@ -94,8 +172,9 @@ const setInventory = async (inventoryItemId, locationId, available) => {
   const variables = {
     input: {
       reason: "correction",
-      name: "absolute_adjustment",
-      changes: [
+      name: "available",
+      ignoreCompareQuantity: true,
+      quantities: [
         {
           inventoryItemId,
           locationId,
@@ -105,55 +184,166 @@ const setInventory = async (inventoryItemId, locationId, available) => {
     },
   };
 
-  const res = await axiosInstance.post("", { query: mutation, variables });
-  return res.data;
+  try {
+    const res = await axiosInstance.post("", { query: mutation, variables });
+    
+    // Verificar si hay errores de usuario
+    if (res.data.data?.inventorySetQuantities?.userErrors?.length > 0) {
+      return { 
+        success: false, 
+        userErrors: res.data.data.inventorySetQuantities.userErrors 
+      };
+    }
+    
+    return { 
+      success: true, 
+      data: res.data.data.inventorySetQuantities 
+    };
+  } catch (err) {
+    console.error("Error setting inventory (GraphQL):", err?.response?.data || err.message);
+    return { 
+      success: false, 
+      error: err?.response?.data || err.message 
+    };
+  }
 };
 
 const processRow = async (row) => {
-  const sku = String(row.sku).trim();
-  const locationName = String(row.location_name).trim();
+  const sku = String(row.sku || "").trim();
+  const locationName = String(row.location_name || "").trim();
   const available = parseInt(row.available, 10);
 
-  if (!sku || !locationName) {
-    return { sku, locationName, result: "error", message: "Missing data" };
+  if (!sku || !locationName || isNaN(available)) {
+    return { 
+      sku, 
+      locationName, 
+      result: "error", 
+      message: "Missing or invalid data (sku, location_name, or available)" 
+    };
   }
 
   try {
+    // 1. Buscar producto por SKU
+    console.log(`  → Searching product with SKU: ${sku}`);
     const found = await findProductBySKU(sku);
     if (!found || !found.variant) {
-      return { sku, locationName, result: "error", message: "Product not found by SKU" };
+      return { 
+        sku, 
+        locationName, 
+        result: "error", 
+        message: "Product/variant not found by SKU" 
+      };
     }
 
     const inventoryItemId = found.variant.inventory_item_id
       ? `gid://shopify/InventoryItem/${found.variant.inventory_item_id}`
       : null;
 
-    const locationId = await getLocationIdByName(locationName);
-    if (!locationId) {
-      return { sku, locationName, result: "error", message: "Location not found" };
+    if (!inventoryItemId) {
+      return { 
+        sku, 
+        locationName, 
+        result: "error", 
+        message: "Variant has no inventory_item_id" 
+      };
     }
 
-    const res = await setInventory(inventoryItemId, locationId, available);
+    console.log(`  → Found inventory item: ${inventoryItemId}`);
 
-    if (res.data?.inventorySetQuantities?.userErrors?.length) {
+    // 2. Buscar ubicación
+    console.log(`  → Searching location: ${locationName}`);
+    const location = await getLocationByName(locationName);
+    if (!location) {
+      return { 
+        sku, 
+        locationName, 
+        result: "error", 
+        message: "Location not found" 
+      };
+    }
+
+    const locationId = location.id;
+    console.log(`  → Found location: ${locationId} (Active: ${location.isActive})`);
+
+    // Si la ubicación está inactiva, informar pero continuar
+    if (!location.isActive) {
+      console.log(`  ⚠️  Location "${locationName}" is INACTIVE, but will attempt to set inventory anyway`);
+    }
+
+    // 3. Verificar si existe el nivel de inventario
+    let inventoryLevel = await getInventoryLevel(inventoryItemId, locationId);
+
+    if (!inventoryLevel) {
+      // No existe, necesitamos conectarlo primero (funciona incluso con ubicaciones inactivas)
+      console.log(`  → Inventory not connected to this location. Connecting...`);
+      
+      const connectionRes = await connectInventoryToLocation(inventoryItemId, locationId);
+      
+      if (!connectionRes.success) {
+        return {
+          sku,
+          locationName,
+          result: "error",
+          message: `Failed to connect inventory to location: ${JSON.stringify(connectionRes.error)}`,
+        };
+      }
+      
+      if (connectionRes.alreadyExists) {
+        console.log(`  → Inventory already connected`);
+      } else {
+        console.log(`  → Inventory level connected successfully`);
+      }
+      
+      await sleep(500);
+      
+      // Verificar nuevamente
+      inventoryLevel = await getInventoryLevel(inventoryItemId, locationId);
+      
+      if (!inventoryLevel) {
+        // Si aún no existe después de conectar, puede ser que la ubicación esté inactiva
+        // Intentaremos actualizar de todas formas
+        console.log(`  ⚠️  Inventory level still not found, but will attempt update anyway`);
+      }
+    }
+
+    const currentStock = inventoryLevel?.available || 0;
+    console.log(`  → Current stock: ${currentStock}`);
+    console.log(`  → Setting stock to: ${available} (using inventorySetQuantities GraphQL)`);
+
+    // 4. Actualizar cantidad usando inventorySetQuantities (GraphQL)
+    const updateRes = await setInventoryGraphQL(inventoryItemId, locationId, available);
+
+    if (!updateRes.success) {
+      const errorMsg = updateRes.userErrors 
+        ? updateRes.userErrors.map(e => e.message).join(", ")
+        : JSON.stringify(updateRes.error);
+      
       return {
         sku,
         locationName,
         result: "error",
-        message: JSON.stringify(res.data.inventorySetQuantities.userErrors),
+        message: `Failed to set inventory: ${errorMsg}`,
       };
     }
+
+    console.log(`  → Stock updated successfully via GraphQL!`);
 
     return {
       sku,
       locationName,
       result: "success",
-      message: `Stock set to ${available}`,
+      message: `Stock updated from ${currentStock} to ${available} (GraphQL inventorySetQuantities)${!location.isActive ? ' [Location was INACTIVE]' : ''}`,
     };
+
   } catch (err) {
-    return { sku, locationName, result: "error", message: err.message };
+    return { 
+      sku, 
+      locationName, 
+      result: "error", 
+      message: `Exception: ${err.message}` 
+    };
   } finally {
-    await sleep(300);
+    await sleep(400);
   }
 };
 
@@ -194,7 +384,6 @@ function getChileTimestamp() {
   const minute = parts.find(p => p.type === 'minute').value;
   const second = parts.find(p => p.type === 'second').value;
   
-  // Formato: YYYY-MM-DD-HHMMSS
   return `${year}-${month}-${day}-${hour}${minute}${second}`;
 }
 
@@ -207,21 +396,20 @@ const main = async () => {
     }
 
     const rows = await readCsv(csvPath);
+    console.log(`\n📦 Processing ${rows.length} inventory records using GraphQL inventorySetQuantities...\n`);
+    
     const report = [];
 
-    for (const row of rows) {
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      console.log(`\n[${i + 1}/${rows.length}] Processing SKU: ${row.sku} @ ${row.location_name}`);
+      
       try {
         const res = await processRow(row);
-        if (res.message && res.message.toLowerCase().includes("location not found")) {
-          res.message = `Location "${row.location_name}" not found or inactive`;
-        }
-
-        console.log(res);
+        console.log(`  ✓ Result: ${res.result} - ${res.message}`);
         report.push(res);
-
       } catch (error) {
-        console.error("Error processing row:", row, error);
-
+        console.error(`  ✗ Error processing row:`, error.message);
         report.push({
           sku: row.sku || "unknown",
           locationName: row.location_name || "unknown",
@@ -233,8 +421,6 @@ const main = async () => {
 
     // Generar timestamp en horario de Chile
     const timestamp = getChileTimestamp();
-
-    // Crear ruta del reporte
     const outPath = path.resolve(process.cwd(), "reports", `inventory-report-${timestamp}.csv`);
     
     // Crear carpeta reports si no existe
@@ -243,7 +429,19 @@ const main = async () => {
     // Escribir reporte
     await writeReport(report, outPath);
     
-    console.log("Report generated:", outPath);
+    // Resumen
+    const success = report.filter(r => r.result === "success").length;
+    const errors = report.filter(r => r.result === "error").length;
+    
+    console.log("\n" + "=".repeat(60));
+    console.log("📊 SUMMARY");
+    console.log("=".repeat(60));
+    console.log(`✓ Successful: ${success}`);
+    console.log(`✗ Errors: ${errors}`);
+    console.log(`📄 Report: ${outPath}`);
+    console.log(`🔧 Method: GraphQL inventorySetQuantities mutation`);
+    console.log("=".repeat(60) + "\n");
+    
   } catch (err) {
     console.error("Fatal error:", err);
     process.exit(1);
